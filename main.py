@@ -1,10 +1,28 @@
+import math
+import random
+
+import matplotlib.pyplot
 import numpy as np
+import matplotlib.pyplot as plt
+# MNIST dataset loaded from the keras package.
+import os
+
+os.environ["KERAS_BACKEND"] = "tensorflow"
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+
+import keras
 
 # This NN abstracts away the concept of the neuron and is basically just a bunch of matrix multiplication. It's basically what a NN is, really.
 # I try to keep the indexing of the layers and its parameters consistent, with the first layer be index 0 and last be (nbLayers) - 1.
 
-# Learning rate should be tweaked to produce best learning results
-LEARNING_RATE = 0.1
+# Hyperparameters
+LEARNING_RATE = 0.0001
+WEIGHT_SCALING = 1
+BATCH_SIZE = 256
+NB_EPOCHS = 4
+TRAINING_SET_COUNT = 60000
+PARTIAL_NORMALIZATION = 1
+
 
 # Initializes the parameters of the NN given the dimensions of the layers as
 # an array.
@@ -13,7 +31,7 @@ def init_paramaters(layer_dims):
 
     for layer in range(1, len(layer_dims)):
         # Each row is the number of neurons in next layer, each column is number of neurons in previous layer
-        model['W' + str(layer)] = np.random.rand(layer_dims[layer], layer_dims[layer - 1])
+        model['W' + str(layer)] = np.random.normal(0, math.sqrt(2 / layer_dims[layer - 1]), (layer_dims[layer], layer_dims[layer - 1])) * WEIGHT_SCALING
         # Length = number of neurons in next layer
         model['b' + str(layer)] = np.zeros(layer_dims[layer])
         # NOTE: First layer does not have an activation value. Hence the reason I initialize it here.
@@ -28,14 +46,25 @@ def init_paramaters(layer_dims):
 
 # Returns vector of elementwise maximum between 0 and the vector component.
 def relu(z):
-    return np.maximum(0, z)
+    return np.where(z >= 0, z, 0.02 * z)
+
+
+def tanh(z):
+    return np.tanh(z)
+
+
+def tanh_derivative(z):
+    return 1 - tanh(z)**2
 
 
 # Returns softmaxed vector, using numerically stable softmax
-def softmax(array):
-    expArray = np.exp(array - np.max(array))
+def sigmoid(array):
+    return 1 / (1 + np.exp(-array))
 
-    return expArray / expArray.sum(axis=0)
+
+def softmax(array):
+    expArray = np.exp(array - max(array))
+    return expArray / np.sum(expArray)
 
 
 # Forward propagation, x = pixel vals of 1 example, parameters = model.
@@ -45,58 +74,185 @@ def forward_propagation(x, model):
 
     model['Z0'] = x
 
-    for layer in range(1, nbLayers - 1):
-        model['Z' + str(layer)] = model['W' + str(layer)].dot(model['Z' + str(layer - 1)]) + (model['b' + str(layer)])
+    model['Z1'] = model['W1'].dot(model['Z0']) + (model['b1'])
+    model['A1'] = relu(model['Z1'])
+
+    for layer in range(2, nbLayers - 1):
+        model['Z' + str(layer)] = model['W' + str(layer)].dot(model['A' + str(layer - 1)]) + (model['b' + str(layer)])
         model['A' + str(layer)] = relu(model['Z' + str(layer)])
 
-    # Doing last layer separately for softmax
-    model['Z' + str(nbLayers - 1)] = model['W' + str(nbLayers - 1)].dot(model['Z' + str(nbLayers - 2)]) + (model['b' + str(nbLayers - 1)])
-    model['A' + str(nbLayers - 1)] = softmax(model['Z' + str(nbLayers - 1)])
+    # Doing last layer separately for sigmoid and normalization of last Z. -------------------------- TOOK OUT SOFTMAX
+    intermediateZ = model['W' + str(nbLayers - 1)].dot(model['Z' + str(nbLayers - 2)]) + (model['b' + str(nbLayers - 1)])
+    model['Z' + str(nbLayers - 1)] = intermediateZ
+    model['A' + str(nbLayers - 1)] = (model['Z' + str(nbLayers - 1)])
 
     return model
 
 
-# y = ground truth. Will use cross entropy loss. Recall ith CEL is -y_i * log(prediction_i)
+# y = ground truth. Will use MSE.
 def loss(y, model):
     nbLayers = (len(model) + 3) // 4
+    one_hot_encoding = np.zeros(len(model['A' + str(nbLayers - 1)]))
+    one_hot_encoding[y] = 1
+    prediction = model['A' + str(nbLayers - 1)]
+    loss = 0
 
-    return -np.sum(y * np.log(model['A' + str(nbLayers - 1)]))
+    for i in range(len(prediction)):
+        loss += (one_hot_encoding[i] - prediction[i]) ** 2
+
+    regLoss = loss / 2
+
+    return regLoss
 
 
 # Derivative of the relu is really just a 0, 1 piecewise function
 def relu_derivative(array):
-    return (array >= 0) * 1
+    return np.where(array >= 0, 1, 0.02)
 
 
 # This is where the biggest part of NNs play a role; backpropagation.
 # Will follow BP algorithm laid out in bpalg.png
 def backpropagation(y, model):
     nbLayers = (len(model) + 3) // 4
+    partialDerivatives = {}
+
+    one_hot_encoding = np.zeros(len(model['Z' + str(nbLayers - 1)]))
+    one_hot_encoding[y] = 1
 
     # Getting first delta.
-    deltas = {nbLayers - 1: model['A' + str(nbLayers - 1)] - y}
+    deltas = {nbLayers - 1: model['A' + str(nbLayers - 1)] - one_hot_encoding}
 
     # Getting the rest of the deltas.
     for layer in range(nbLayers - 2, 0, -1):
         deltas[layer] = np.dot(np.transpose(model['W' + str(layer + 1)]), deltas[layer + 1]) * relu_derivative(model['Z' + str(layer)])
 
-    # Here we update the parameters of our model. Since first layer does not have an activation function, I will just use the raw input data.
-
-    model['W1'] -= LEARNING_RATE * np.outer(deltas[1], model['Z0'])
-    model['b1'] -= LEARNING_RATE * deltas[1]
+    # Here we get the first set of partial derivatives. Since first layer does not have an activation function, I will just use the raw input data.
+    partialDerivatives['W1'] = np.outer(deltas[1], model['Z0'])
+    partialDerivatives['b1'] = deltas[1]
 
     for layer in range(2, nbLayers):
-        model['W' + str(layer)] -= LEARNING_RATE * np.outer(deltas[layer], model['A' + str(layer - 1)])
-        model['b' + str(layer)] -= LEARNING_RATE * deltas[layer]
+        partialDerivatives['W' + str(layer)] = np.outer(deltas[layer], model['A' + str(layer - 1)])
+        partialDerivatives['b' + str(layer)] = deltas[layer]
+
+    return partialDerivatives
 
 
-model = init_paramaters([3, 2, 3])
-label = np.array([0,0,1])
+def minibatchTrain():
+    (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
+    nbMiniBatches = TRAINING_SET_COUNT // BATCH_SIZE
+    batchVector = []
 
-for i in range(100):
-    model = forward_propagation([1, 2, 3], model)
-    lossval = loss(label, model)
-    backpropagation(label, model)
+    for i in range(nbMiniBatches):
+        singleBatch = []
+        for j in range(BATCH_SIZE):
+            singleExample = []
 
-    if i % 10 == 0:
-        print("Loss:", lossval)
+            index = random.randint(0, TRAINING_SET_COUNT - 1)
+
+            singleExample.append(x_train[index].flatten() / 255)
+            singleExample.append(y_train[index])
+
+            singleBatch.append(singleExample)
+
+        batchVector.append(singleBatch)
+
+    return batchVector
+
+
+def combinePartials(singlePartialDerivative, totalPartialDerivatives):
+    for key in singlePartialDerivative:
+        if key in totalPartialDerivatives:
+            totalPartialDerivatives[key] += PARTIAL_NORMALIZATION * singlePartialDerivative[key]
+        else:
+            totalPartialDerivatives[key] = PARTIAL_NORMALIZATION * singlePartialDerivative[key]
+
+    return totalPartialDerivatives
+
+
+def updateParams(model, partials):
+    for key in partials:
+        model[key] -= np.clip(LEARNING_RATE * partials[key], -0.5, 0.5)
+
+    return model
+
+
+def train(model):
+    batchesVector = minibatchTrain()
+    x_axis = []
+    y_axis = []
+
+    # What we have now is essentially 2 tuples of tuples of training examples.
+    nbMiniBatches = TRAINING_SET_COUNT // BATCH_SIZE
+    tempModel = model
+    totalNbBatchesTrained = 0
+
+    for epoch in range(NB_EPOCHS):
+        print(f"Epoch: {epoch}")
+
+        for i in range(nbMiniBatches):
+
+            batchPartialDerivative = {}
+            batchLoss = 0
+
+            for j in range(BATCH_SIZE):
+                tempModel = forward_propagation(batchesVector[i][j][0], tempModel)
+                partialDerivativeOneExample = backpropagation(batchesVector[i][j][1], tempModel)
+                batchPartialDerivative = combinePartials(partialDerivativeOneExample, batchPartialDerivative)
+
+                batchLoss += loss(batchesVector[i][j][1], tempModel)
+
+            tempModel = updateParams(tempModel, batchPartialDerivative)
+            totalNbBatchesTrained += 1
+
+            x_axis.append(totalNbBatchesTrained)
+            lossVal = batchLoss / BATCH_SIZE
+            y_axis.append(lossVal)
+
+    plt.plot(x_axis, y_axis)
+    plt.show()
+
+    return tempModel
+
+    # x = np.array([1, 2, 0])
+    # y = 2
+    #
+    # for i in range(1000):
+    #     tempModel = forward_propagation(x, tempModel)
+    #     tempModel = backpropagation(y, tempModel)
+    #     x_axis.append(i)
+    #     lossVal = loss(y, tempModel)
+    #     y_axis.append(lossVal)
+    #     print(lossVal)
+    #
+    # plt.plot(x_axis, y_axis)
+    # plt.show()
+
+
+def afterTrain(model):
+    nbLayers = (len(model) + 3) // 4
+    (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
+
+    num_row = 2
+    num_col = 5
+
+    # plot images
+    fig, axes = plt.subplots(num_row, num_col, figsize=(1.5 * num_col, 2 * num_row))
+    for i in range(10):
+        index = random.randint(0, 10000)
+        modelAfter = forward_propagation(x_test[index].flatten(), model)
+
+        maxVal = np.max(modelAfter['A' + str(nbLayers - 1)])
+        maxIndex = np.where(modelAfter['A' + str(nbLayers - 1)] == maxVal)[0]
+
+        ax = axes[i // num_col, i % num_col]
+        ax.imshow(x_test[index], cmap='gray')
+        ax.set_title(f'Prediction: {maxIndex}')
+
+    np.save('model.npy', model)
+
+    plt.show()
+
+
+model = init_paramaters([784, 400, 400, 10])
+model = train(model)
+afterTrain(model)
