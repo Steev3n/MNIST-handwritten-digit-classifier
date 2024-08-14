@@ -1,7 +1,6 @@
 import math
 import random
 
-import matplotlib.pyplot
 import numpy as np
 import matplotlib.pyplot as plt
 # MNIST dataset loaded from the keras package.
@@ -16,12 +15,16 @@ import keras
 # I try to keep the indexing of the layers and its parameters consistent, with the first layer be index 0 and last be (nbLayers) - 1.
 
 # Hyperparameters
-LEARNING_RATE = 0.0001
-WEIGHT_SCALING = 1
-BATCH_SIZE = 256
-NB_EPOCHS = 4
+LEARNING_RATE = 0.00013
+WEIGHT_SCALING = 0.8
+BATCH_SIZE = 60
+NB_EPOCHS = 45
 TRAINING_SET_COUNT = 60000
 PARTIAL_NORMALIZATION = 1
+
+TESTING_SET_COUNT = 10000
+
+(x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
 
 
 # Initializes the parameters of the NN given the dimensions of the layers as
@@ -47,24 +50,6 @@ def init_paramaters(layer_dims):
 # Returns vector of elementwise maximum between 0 and the vector component.
 def relu(z):
     return np.where(z >= 0, z, 0.02 * z)
-
-
-def tanh(z):
-    return np.tanh(z)
-
-
-def tanh_derivative(z):
-    return 1 - tanh(z)**2
-
-
-# Returns softmaxed vector, using numerically stable softmax
-def sigmoid(array):
-    return 1 / (1 + np.exp(-array))
-
-
-def softmax(array):
-    expArray = np.exp(array - max(array))
-    return expArray / np.sum(expArray)
 
 
 # Forward propagation, x = pixel vals of 1 example, parameters = model.
@@ -138,7 +123,6 @@ def backpropagation(y, model):
 
 
 def minibatchTrain():
-    (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
     nbMiniBatches = TRAINING_SET_COUNT // BATCH_SIZE
     batchVector = []
 
@@ -169,17 +153,37 @@ def combinePartials(singlePartialDerivative, totalPartialDerivatives):
     return totalPartialDerivatives
 
 
-def updateParams(model, partials):
+def updateParams(model, partials, lr):
     for key in partials:
-        model[key] -= np.clip(LEARNING_RATE * partials[key], -0.5, 0.5)
+        model[key] -= np.clip(lr * partials[key], -0.5, 0.5)
 
     return model
+
+
+def getTestLoss(model):
+    nbLayers = (len(model) + 3) // 4
+    nbRightPrediction = 0
+
+    for index in range(TESTING_SET_COUNT):
+        modelAfter = forward_propagation(x_test[index].flatten(), model)
+
+        maxVal = np.max(modelAfter['A' + str(nbLayers - 1)])
+        maxIndex = np.where(modelAfter['A' + str(nbLayers - 1)] == maxVal)[0]
+
+        if y_test[index] == maxIndex:
+            nbRightPrediction += 1
+
+    return nbRightPrediction / TESTING_SET_COUNT
 
 
 def train(model):
     batchesVector = minibatchTrain()
     x_axis = []
-    y_axis = []
+    y_axis_loss = []
+    y_axis_lr = []
+    x_axis_test = []
+    y_axis_test = []
+    figure, axis = plt.subplots(2)
 
     # What we have now is essentially 2 tuples of tuples of training examples.
     nbMiniBatches = TRAINING_SET_COUNT // BATCH_SIZE
@@ -187,7 +191,6 @@ def train(model):
     totalNbBatchesTrained = 0
 
     for epoch in range(NB_EPOCHS):
-        print(f"Epoch: {epoch}")
 
         for i in range(nbMiniBatches):
 
@@ -201,36 +204,31 @@ def train(model):
 
                 batchLoss += loss(batchesVector[i][j][1], tempModel)
 
-            tempModel = updateParams(tempModel, batchPartialDerivative)
+                #if j % 10000 == 0: print(f"Epoch: {epoch + 1}, Example: {j + 1} out of {BATCH_SIZE}")
+
+            lr = LEARNING_RATE / (1.5 ** (epoch // 5))
+            y_axis_lr.append(lr)
+
+            tempModel = updateParams(tempModel, batchPartialDerivative, lr)
             totalNbBatchesTrained += 1
 
             x_axis.append(totalNbBatchesTrained)
             lossVal = batchLoss / BATCH_SIZE
-            y_axis.append(lossVal)
+            y_axis_loss.append(lossVal)
 
-    plt.plot(x_axis, y_axis)
+            print(f"Epoch: {epoch + 1} out of {NB_EPOCHS}, Minibatch: {i + 1} out of {nbMiniBatches}")
+
+    axis[0].plot(x_axis, y_axis_loss)
+    axis[0].set_title("Training loss")
+    axis[1].plot(x_axis, y_axis_lr)
+    axis[1].set_title("Learning rate")
     plt.show()
 
     return tempModel
 
-    # x = np.array([1, 2, 0])
-    # y = 2
-    #
-    # for i in range(1000):
-    #     tempModel = forward_propagation(x, tempModel)
-    #     tempModel = backpropagation(y, tempModel)
-    #     x_axis.append(i)
-    #     lossVal = loss(y, tempModel)
-    #     y_axis.append(lossVal)
-    #     print(lossVal)
-    #
-    # plt.plot(x_axis, y_axis)
-    # plt.show()
-
 
 def afterTrain(model):
     nbLayers = (len(model) + 3) // 4
-    (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
 
     num_row = 2
     num_col = 5
@@ -253,6 +251,14 @@ def afterTrain(model):
     plt.show()
 
 
-model = init_paramaters([784, 400, 400, 10])
+def load_model():
+    model = np.load('model.npy', allow_pickle='TRUE').item()
+
+    return model
+
+
+model = init_paramaters([784, 390, 390, 10])
+
 model = train(model)
 afterTrain(model)
+print(getTestLoss(load_model()))
