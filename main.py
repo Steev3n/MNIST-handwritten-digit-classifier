@@ -15,10 +15,10 @@ import keras
 # I try to keep the indexing of the layers and its parameters consistent, with the first layer be index 0 and last be (nbLayers) - 1.
 
 # Hyperparameters
-LEARNING_RATE = 0.00013
+LEARNING_RATE = 0.000133
 WEIGHT_SCALING = 0.8
 BATCH_SIZE = 60
-NB_EPOCHS = 45
+NB_EPOCHS = 50
 TRAINING_SET_COUNT = 60000
 PARTIAL_NORMALIZATION = 1
 
@@ -206,7 +206,7 @@ def train(model):
 
                 #if j % 10000 == 0: print(f"Epoch: {epoch + 1}, Example: {j + 1} out of {BATCH_SIZE}")
 
-            lr = LEARNING_RATE / (1.5 ** (epoch // 5))
+            lr = LEARNING_RATE / (1.4 ** (epoch // 5))
             y_axis_lr.append(lr)
 
             tempModel = updateParams(tempModel, batchPartialDerivative, lr)
@@ -252,13 +252,13 @@ def afterTrain(model):
 
 
 def load_model():
-    model = np.load('model.npy', allow_pickle='TRUE').item()
+    model = np.load('model (95%).npy', allow_pickle='TRUE').item()
 
     return model
 
 
-model = init_paramaters([784, 390, 390, 10])
+model = init_paramaters([784, 385, 385, 10])
 
-model = train(model)
-afterTrain(model)
-print(getTestLoss(load_model()))
+# model = train(model)
+afterTrain(load_model())
+print("Accuracy:", getTestLoss(load_model()))
